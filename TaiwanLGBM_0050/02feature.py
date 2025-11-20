@@ -8,49 +8,58 @@ import os
 warnings.filterwarnings("ignore")
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 
+# 股票清單
+symbols_all50 = ['0050.TW']
 
-# 九支中波動股票
-symbols_middle_9 = ['2886.TW', '2317.TW', '1216.TW', '2395.TW', '1101.TW', '2382.TW', '4958.TW', '2356.TW', '3711.TW']
-
-# 載入step1匯出檔案（請確認用對檔案版本）
-step1_file = 'outcomes_middle_features_2025-10-23.csv'
+# 載入資料
+step1_file = 'outcomes_2025-10-23.csv'
 print(f"載入資料: {step1_file}")
 df = pd.read_csv(path_pc + step1_file, index_col=[0,1])
 df.index.names = ['symbol','date']
-df = df[df.index.get_level_values('symbol').isin(symbols_middle_9)]
+df = df[df.index.get_level_values('symbol').isin(symbols_all50)]
+
+# 只保留上市後資料
+for symbol in symbols_all50:
+    if symbol in df.index.get_level_values('symbol'):
+        this_df = df.loc[symbol]
+        fvi = this_df[['open','close']].first_valid_index()
+        if fvi is not None:
+            drop_idx = this_df.loc[:fvi].index
+            df = df.drop(drop_idx, errors='ignore')
 
 valid_symbols = sorted(set(df.index.get_level_values('symbol')))
 print(f"過濾後的台股清單: {valid_symbols}")
 
-# N日最大漲跌幅
-N = 10
-percentile_upper = 0.7
-percentile_lower = 0.3
+# 固定門檻 N日最大漲跌幅特徵（一次計算3/5/7/10天）
+future_days_list = [3, 5, 7, 10]
+for N in future_days_list:
+    df[f'future_max_return_{N}'] = np.nan
+    df[f'future_min_return_{N}'] = np.nan
 
-df['future_max_return'] = np.nan
-df['future_min_return'] = np.nan
 for symbol in valid_symbols:
     symbol_df = df.loc[df.index.get_level_values('symbol') == symbol].copy()
     closes = symbol_df['close'].values
     for i, idx in enumerate(symbol_df.index):
-        if i + N < len(closes):
-            future_window = closes[i+1:i+1+N]
-            this_close = closes[i]
-            future_max = np.max(future_window)
-            future_min = np.min(future_window)
-            max_return = (future_max - this_close) / this_close
-            min_return = (future_min - this_close) / this_close
-            df.loc[idx, 'future_max_return'] = max_return
-            df.loc[idx, 'future_min_return'] = min_return
+        for N in future_days_list:
+            if i + N < len(closes):
+                future_window = closes[i + 1 : i + 1 + N]
+                this_close = closes[i]
+                future_max = (np.max(future_window) - this_close) / this_close
+                future_min = (np.min(future_window) - this_close) / this_close
+                df.loc[idx, f'future_max_return_{N}'] = future_max
+                df.loc[idx, f'future_min_return_{N}'] = future_min
 
-upper_cut = df['future_max_return'].quantile(percentile_upper)
-lower_cut = df['future_min_return'].quantile(percentile_lower)
-df['label_v2'] = 0
-df.loc[df['future_max_return'] > upper_cut, 'label_v2'] = 1
-df.loc[df['future_min_return'] < lower_cut, 'label_v2'] = -1
-print(f"label分布: {df['label_v2'].value_counts(normalize=True)}")
+# ======= 多版本標籤分布分析/標註 label_fixed_N =======
+up_gate, down_gate = 0.03, -0.03
+for N in future_days_list:
+    df[f'label_fixed_{N}'] = 0
+    df.loc[df[f'future_max_return_{N}'] > up_gate, f'label_fixed_{N}'] = 1
+    df.loc[df[f'future_min_return_{N}'] < down_gate, f'label_fixed_{N}'] = -1
+    print(f"\n--- N={N} 天，固定門檻({up_gate*100:.1f}%/{down_gate*100:.1f}%) 標籤分布 ---")
+    print(df[f'label_fixed_{N}'].value_counts(normalize=True))
 
-# ATR 多期
+# =========== 以下原本特徵工程區塊保持不變 ===========
+
 def wwma(values, n): return values.ewm(alpha=1/n, adjust=False).mean()
 def atr(df, symbol, n=14):
     df_symbol = df.loc[df.index.get_level_values('symbol') == symbol].copy()
@@ -71,7 +80,6 @@ for symbol in valid_symbols:
     df.loc[(symbol, slice(None)), 'delta_atr10/atr100_10'] = df.loc[(symbol, slice(None)), 'atr10/atr100'] - df.loc[(symbol, slice(None)), 'atr10/atr100'].shift(10)
     df.loc[(symbol, slice(None)), 'delta_atr10/atr100_3'] = df.loc[(symbol, slice(None)), 'atr10/atr100'] - df.loc[(symbol, slice(None)), 'atr10/atr100'].shift(3)
 
-# 波動特徵
 std_func = lambda x,n: x.rolling(n,min_periods=1).std()
 for symbol in valid_symbols:
     df.loc[(symbol, slice(None)), 'volatility5'] = std_func(df.loc[(symbol, slice(None)), 'close'],5)
@@ -83,7 +91,6 @@ df['volatility10_ratio'] = df['volatility10'] / df['close']
 df['volatility25_ratio'] = df['volatility25'] / df['close']
 df['volatility100_ratio'] = df['volatility100'] / df['close']
 
-# 多窗口momentum
 def momentum_score(ts):
     x = np.arange(len(ts))
     log_ts = np.log(ts)
@@ -97,7 +104,6 @@ for window, min_mom in momentum_windows:
         arr = df.loc[(symbol, slice(None)), 'close']
         df.loc[(symbol, slice(None)), f'momentum_{window}'] = arr.rolling(window, min_periods=min_mom).apply(momentum_score)
 
-# Bull/Bull Ratio/High特徵
 ema_40 = lambda x: x.ewm(span=40,min_periods=1).mean()
 ema_80 = lambda x: x.ewm(span=80,min_periods=1).mean()
 for symbol in valid_symbols:
@@ -113,7 +119,6 @@ df['close>50d_high'] = df['close'] >= df['50d_high']
 df['volume_vs_50d_high'] = df['volume'] / df['50d_high_volume']
 df['close_vs_50d_high'] = df['close'] / df['50d_high']
 
-# Scaling
 zscore_50 = lambda x: (x-x.rolling(50,min_periods=1).mean())/x.rolling(50,min_periods=1).std()
 scale_cols = ['log volume','volume_pct_change_1_day','volume_pct_change_5_day','past_return_1','past_return_2','past_return_3',
               'past_return_4','past_return_5','past_return_10','volatility50','delta_atr10/atr100_3','delta_atr10/atr100_10',
@@ -124,7 +129,6 @@ for col in scale_cols:
             arr = df.loc[(symbol, slice(None)), col]
             df.loc[(symbol, slice(None)), col+'_scaled50'] = zscore_50(arr)
 
-# Market Meanness Index
 def mmi(closes):
     m = closes.median()
     nh = 0; nl = 0
@@ -136,7 +140,6 @@ for symbol in valid_symbols:
     arr = df.loc[(symbol,slice(None)),'close']
     df.loc[(symbol,slice(None)),'mmi50'] = arr.rolling(50,min_periods=2).apply(mmi)
 
-# Dynamic targets
 ema_std50 = lambda x: x.ewm(span=50,min_periods=20).std()
 for symbol in valid_symbols:
     df.loc[(symbol,slice(None)),'past_return_1_ema_std50'] = ema_std50(df.loc[(symbol,slice(None)),'past_return_1'])
@@ -145,7 +148,6 @@ for symbol in valid_symbols:
 df['past_return_1_ema_std50*2.2'] = df['past_return_1_ema_std50'] * 2.2
 df['price_chg_1_ema_std50*2.2'] = df['price_chg_1_ema_std50'] * 2.2 / 50
 
-# 多期STD
 std_50 = lambda x: x.rolling(50, min_periods=20).std()
 for symbol in valid_symbols:
     df.loc[(symbol,slice(None)), 'volume_std50'] = std_50(df.loc[(symbol, slice(None)), 'volume'])
@@ -162,28 +164,14 @@ df['target_lower'] = df['close'] * (1-df['past_return_5_std50'])
 df['target_upper_v2'] = df['close'] * (1+df['past_return_1_ema_std50*2.2'])
 df['target_lower_v2'] = df['close'] * (1-df['past_return_1_ema_std50*2.2'])
 
-# Triple Barrier標籤
-df['label_v2'] = np.nan
-for symbol in valid_symbols:
-    symbol_df = df.loc[df.index.get_level_values('symbol') == symbol].copy()
-    for i, idx in enumerate(symbol_df.index):
-        j = 1
-        while i+j < len(symbol_df) and j <= 5:
-            future_row = symbol_df.iloc[i+j]
-            if pd.isna(future_row['high']) or pd.isna(future_row['low']) or pd.isna(symbol_df.iloc[i]['target_upper_v2']) or pd.isna(symbol_df.iloc[i]['target_lower_v2']):
-                j += 1
-                continue
-            if future_row['high'] > symbol_df.iloc[i]['target_upper_v2']:
-                df.loc[idx, 'label_v2'] = 1
-                break
-            elif future_row['low'] < symbol_df.iloc[i]['target_lower_v2']:
-                df.loc[idx, 'label_v2'] = -1
-                break
-            elif j == 5:
-                df.loc[idx, 'label_v2'] = 0
-            j += 1
-
+# ======== 結果儲存 ========
 last_date = pd.to_datetime(sorted(list(set(df.index.get_level_values('date'))))[-1])
-out_csv = f'outcomes_middle_features_step2_{last_date.strftime("%Y-%m-%d")}.csv'
-df.to_csv(path_pc + out_csv)
-print("Done! STEP2完成，輸出檔名:", out_csv)
+out_csv = f'outcomes_new_features_{last_date.strftime("%Y-%m-%d")}.csv'
+full_path = os.path.join(path_pc, out_csv)
+print("將儲存:", full_path)
+try:
+    df.to_csv(full_path)
+    print("Done! STEP2完成，輸出檔名:", out_csv)
+except PermissionError:
+    print("【權限錯誤】請確認該CSV未被Excel等程式佔用後再執行！")
+
