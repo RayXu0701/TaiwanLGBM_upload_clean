@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore")
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 
 # 股票清單
-symbols_all50 = ['0050.TW']
+symbols_all50 = ['0056.TW']
 
 # 載入資料
 step1_file = 'outcomes_2025-10-23.csv'
@@ -30,35 +30,39 @@ for symbol in symbols_all50:
 valid_symbols = sorted(set(df.index.get_level_values('symbol')))
 print(f"過濾後的台股清單: {valid_symbols}")
 
-# 固定門檻 N日最大漲跌幅特徵（一次計算3/5/7/10天）
-future_days_list = [3, 5, 7, 10]
-for N in future_days_list:
-    df[f'future_max_return_{N}'] = np.nan
-    df[f'future_min_return_{N}'] = np.nan
+# ===== N=10 未來最大/最小漲跌幅、標籤自動補齊 =====
+N = 10
+up_gate, down_gate = 0.03, -0.03
+future_max_col = f'future_max_return_{N}'
+future_min_col = f'future_min_return_{N}'
+label_col = f'label_fixed_{N}'
 
-for symbol in valid_symbols:
-    symbol_df = df.loc[df.index.get_level_values('symbol') == symbol].copy()
-    closes = symbol_df['close'].values
-    for i, idx in enumerate(symbol_df.index):
-        for N in future_days_list:
+# 若future_max/min_return_10不存在就自動補齊
+if future_max_col not in df.columns or future_min_col not in df.columns:
+    print(f"補充計算 {future_max_col} / {future_min_col} ...")
+    df[future_max_col] = np.nan
+    df[future_min_col] = np.nan
+    for symbol in valid_symbols:
+        symbol_df = df.loc[df.index.get_level_values('symbol') == symbol].copy()
+        closes = symbol_df['close'].values
+        for i, idx in enumerate(symbol_df.index):
             if i + N < len(closes):
                 future_window = closes[i + 1 : i + 1 + N]
                 this_close = closes[i]
                 future_max = (np.max(future_window) - this_close) / this_close
                 future_min = (np.min(future_window) - this_close) / this_close
-                df.loc[idx, f'future_max_return_{N}'] = future_max
-                df.loc[idx, f'future_min_return_{N}'] = future_min
+                df.loc[idx, future_max_col] = future_max
+                df.loc[idx, future_min_col] = future_min
 
-# ======= 多版本標籤分布分析/標註 label_fixed_N =======
-up_gate, down_gate = 0.03, -0.03
-for N in future_days_list:
-    df[f'label_fixed_{N}'] = 0
-    df.loc[df[f'future_max_return_{N}'] > up_gate, f'label_fixed_{N}'] = 1
-    df.loc[df[f'future_min_return_{N}'] < down_gate, f'label_fixed_{N}'] = -1
-    print(f"\n--- N={N} 天，固定門檻({up_gate*100:.1f}%/{down_gate*100:.1f}%) 標籤分布 ---")
-    print(df[f'label_fixed_{N}'].value_counts(normalize=True))
+# 產生N=10標籤
+df[label_col] = 0
+df.loc[df[future_max_col] > up_gate, label_col] = 1
+df.loc[df[future_min_col] < down_gate, label_col] = -1
 
-# =========== 以下原本特徵工程區塊保持不變 ===========
+print(f"\n--- N={N} 天，固定門檻({up_gate*100:.1f}%/{down_gate*100:.1f}%) 標籤分布 ---")
+print(df[label_col].value_counts(normalize=True))
+
+# =========== 以下原本特徵工程區塊保持不變 (全保留) ===========
 
 def wwma(values, n): return values.ewm(alpha=1/n, adjust=False).mean()
 def atr(df, symbol, n=14):
@@ -166,12 +170,11 @@ df['target_lower_v2'] = df['close'] * (1-df['past_return_1_ema_std50*2.2'])
 
 # ======== 結果儲存 ========
 last_date = pd.to_datetime(sorted(list(set(df.index.get_level_values('date'))))[-1])
-out_csv = f'outcomes_new_features_{last_date.strftime("%Y-%m-%d")}.csv'
+out_csv = f'outcomes_new_features_{last_date.strftime("%Y-%m-%d")}_N10.csv'
 full_path = os.path.join(path_pc, out_csv)
 print("將儲存:", full_path)
 try:
     df.to_csv(full_path)
-    print("Done! STEP2完成，輸出檔名:", out_csv)
+    print("Done! STEP2完成（N=10, 全特徵）, 輸出檔名:", out_csv)
 except PermissionError:
     print("【權限錯誤】請確認該CSV未被Excel等程式佔用後再執行！")
-
