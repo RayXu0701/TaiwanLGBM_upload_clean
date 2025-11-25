@@ -17,7 +17,6 @@ TAIWAN_SYMBOLS = ['0056.TW']
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 DATA_PATH = path_pc + 'outcomes_new_features_2025-10-23_multiG.csv'
 
-# 1. 讀檔+台股過濾
 df = pd.read_csv(DATA_PATH, index_col=[0,1])
 df.index.names = ['symbol','date']
 df = df.sort_index()
@@ -25,7 +24,6 @@ df = df[df.index.get_level_values('symbol').isin(TAIWAN_SYMBOLS)]
 df = df.reset_index()
 df['date'] = pd.to_datetime(df['date'])
 
-# 定義評估函數（單組）
 def eval_pred_single(model, X, y, name):
     y_pred = model.predict(X, num_iteration=model.best_iteration)
     y_pred_cls = np.argmax(y_pred, axis=1)
@@ -33,7 +31,6 @@ def eval_pred_single(model, X, y, name):
     f1 = f1_score(y, y_pred_cls, average='macro')
     print(f"\n{name} - Accuracy: {acc:.4f}, Macro F1: {f1:.4f}")
     print("分類詳情:\n", classification_report(y, y_pred_cls, digits=4))
-    # 方向準確率計算
     y_dir = np.where(y==1, 1, np.where(y==2, -1, 0))
     y_pred_dir = np.where(y_pred_cls==1, 1, np.where(y_pred_cls==2, -1, 0))
     valid_idx = (y_dir != 0)
@@ -43,8 +40,6 @@ def eval_pred_single(model, X, y, name):
     else:
         dir_acc = None
         print("無方向樣本，無法計算方向準確率。")
-
-    # 畫混淆矩陣
     plt.figure(figsize=(4,3))
     cm = confusion_matrix(y, y_pred_cls, labels=[0,1,2])
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
@@ -57,7 +52,6 @@ def eval_pred_single(model, X, y, name):
     plt.show()
     return acc, f1, dir_acc
 
-# 預測天數與門檻組合
 N_list = [3,5,7,9]
 gates = [0.03, 0.05, 0.07]
 
@@ -78,11 +72,7 @@ params = {
     'verbose': -1
 }
 
-results = []
-best_dir_acc = -1
-best_model = None
-best_N = None
-best_gate = None
+all_models = []
 
 for N in N_list:
     for gate in gates:
@@ -90,10 +80,8 @@ for N in N_list:
         if label_col not in df.columns:
             print(f"資料需要含有 {label_col}，請確認 feature 工程階段有包含。")
             continue
-
         df_filtered = df[df[label_col].notnull()].copy()
         df_filtered.loc[df_filtered[label_col] == -1, label_col] = 2
-
         skip_cols = [
             label_col,
             'symbol', 'date',
@@ -110,26 +98,21 @@ for N in N_list:
             )
         ]
         df_filtered[features] = df_filtered[features].fillna(0)
-
         df_filtered = df_filtered.sort_values('date')
         total_len = len(df_filtered)
         train_len = int(total_len * 0.5)
         valid_len = int(total_len * 0.25)
-
         train_df = df_filtered.iloc[:train_len]
         valid_df = df_filtered.iloc[train_len:train_len+valid_len]
         test_df  = df_filtered.iloc[train_len+valid_len:]
-
         X_train = train_df[features]
         X_valid = valid_df[features]
         X_test  = test_df[features]
         y_train = train_df[label_col].astype(int)
         y_valid = valid_df[label_col].astype(int)
         y_test  = test_df[label_col].astype(int)
-
         lgb_train = lgb.Dataset(X_train, label=y_train)
         lgb_valid = lgb.Dataset(X_valid, label=y_valid)
-
         print(f"\n訓練 LightGBM 模型 N={N}, 門檻={gate:.2f} ...")
         model = lgb.train(
             params,
@@ -139,40 +122,46 @@ for N in N_list:
             callbacks=[lgb.early_stopping(50), lgb.log_evaluation(100)]
         )
         acc, f1, dir_acc = eval_pred_single(model, X_test, y_test, f'Test set N={N}, Gate={gate:.2f}')
-        results.append({'N': N, 'gate': gate, 'accuracy': acc, 'f1_macro': f1, 'direction_accuracy': dir_acc})
+        all_models.append({
+            'N': N,
+            'gate': gate,
+            'accuracy': acc,
+            'f1_macro': f1,
+            'direction_accuracy': dir_acc,
+            'model': model
+        })
 
-        if dir_acc is not None and dir_acc > best_dir_acc:
-            best_dir_acc = dir_acc
-            best_model = model
-            best_N = N
-            best_gate = gate
+# --- [1]輸出總表
+results_df = pd.DataFrame([
+    {'N': m['N'], 'gate': m['gate'], 'accuracy': m['accuracy'], 'f1_macro': m['f1_macro'], 'direction_accuracy': m['direction_accuracy']}
+    for m in all_models
+])
+print("\n全部模型摘要：")
+print(results_df)
 
-# 將評估結果轉為DataFrame以便視覺化
-results_df = pd.DataFrame(results)
+# --- [2]互動式自選（Jupyter/VSCode可用 input()，最後一行可寫死自己選）
+print("\n請輸入要存檔的 N（如5） 和 gate（如0.03）")
 
-pivot_acc = results_df.pivot(index='N', columns='gate', values='accuracy')
-pivot_f1 = results_df.pivot(index='N', columns='gate', values='f1_macro')
+try:
+    # VSCode/Jupyter可用 input(), 若想直接寫死請修改下兩行
+    N_choice = int(input("N = "))
+    gate_choice = float(input("gate = "))
+except Exception:
+    N_choice = 5
+    gate_choice = 0.03
+    print(f"自動選 N={N_choice} gate={gate_choice}")
 
-plt.figure(figsize=(14,6))
-plt.subplot(1,2,1)
-sns.heatmap(pivot_acc, annot=True, fmt=".3f", cmap="YlGnBu")
-plt.title("Test Accuracy by Predict Days (N) and Gate Threshold")
-plt.xlabel("Gate Threshold")
-plt.ylabel("Predict Days (N)")
+selected = None
+for m in all_models:
+    if m['N'] == N_choice and abs(m['gate']-gate_choice) < 1e-6:
+        selected = m
+        break
 
-plt.subplot(1,2,2)
-sns.heatmap(pivot_f1, annot=True, fmt=".3f", cmap="YlGnBu")
-plt.title("Test Macro F1 by Predict Days (N) and Gate Threshold")
-plt.xlabel("Gate Threshold")
-plt.ylabel("Predict Days (N)")
-
-plt.tight_layout()
-plt.show()
-
-# 存檔最高方向準確率模型
-if best_model is not None:
-    model_file = os.path.join(path_pc, f'best_lightgbm_model_N{best_N}_gate{int(best_gate*100):02d}.txt')
-    best_model.save_model(model_file)
-    print(f"最高方向準確率模型已存檔：{model_file}, N={best_N}, gate={best_gate}, direction_accuracy={best_dir_acc:.4f}")
+if selected is not None:
+    save_path = os.path.join(path_pc, f"model_N{N_choice}_gate{int(gate_choice*100):02d}.txt")
+    selected['model'].save_model(save_path)
+    print(f"\n已儲存 N={N_choice}, gate={gate_choice} 模型在：{save_path}")
 else:
-    print("未找到符合條件的最佳模型")
+    print("查無此組合，請確認選項是否正確。")
+
+print("\n訓練、評估與存檔全部完成！")
