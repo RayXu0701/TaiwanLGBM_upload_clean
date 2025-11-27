@@ -8,13 +8,18 @@ import os
 warnings.filterwarnings("ignore")
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 
-symbols_all50 = ['0056.TW']
+symbols_all50 = ['0050']
 
-step1_file = 'outcomes_2025-10-23.csv'
+step1_file = 'outcomes_twse_2025-05-29.csv'
 print(f"載入資料: {step1_file}")
 df = pd.read_csv(path_pc + step1_file, index_col=[0,1])
 df.index.names = ['symbol', 'date']
 df = df[df.index.get_level_values('symbol').isin(symbols_all50)]
+df = pd.read_csv(path_pc + step1_file, index_col=[0,1])
+df.index.names = ['symbol', 'date']
+print("前 5 筆 index：")
+print(df.index[:5])
+print("所有 symbol 值：", sorted(set(df.index.get_level_values('symbol'))))
 
 for symbol in symbols_all50:
     if symbol in df.index.get_level_values('symbol'):
@@ -146,16 +151,20 @@ for col in scale_cols:
             arr = df.loc[(symbol, slice(None)), col]
             df.loc[(symbol, slice(None)), col + '_scaled50'] = zscore_50(arr)
 
-def mmi(closes):
+def mmi(window_values):
+    closes = pd.Series(window_values)
+    if len(closes) < 2:
+        return np.nan
     m = closes.median()
     nh = 0
     nl = 0
     for i in range(1, len(closes)):
-        if closes[i] > m and closes[i] > closes[i - 1]:
+        if closes.iloc[i] > m and closes.iloc[i] > closes.iloc[i - 1]:
             nl += 1
-        elif closes[i] < m and closes[i] < closes[i - 1]:
+        elif closes.iloc[i] < m and closes.iloc[i] < closes.iloc[i - 1]:
             nh += 1
     return 100 * (nl + nh) / (len(closes) - 1)
+
 
 for symbol in valid_symbols:
     arr = df.loc[(symbol, slice(None)), 'close']
@@ -188,7 +197,7 @@ df['target_lower_v2'] = df['close'] * (1 - df['past_return_1_ema_std50*2.2'])
 
 # ======== 結果儲存 ========
 last_date = pd.to_datetime(sorted(list(set(df.index.get_level_values('date'))))[-1])
-out_csv = f'outcomes_new_features_{last_date.strftime('%Y-%m-%d')}_multiG.csv'
+out_csv = f'outcomes_new_features_{last_date.strftime("%Y-%m-%d")}_multiG.csv'
 full_path = os.path.join(path_pc, out_csv)
 print("將儲存:", full_path)
 try:
