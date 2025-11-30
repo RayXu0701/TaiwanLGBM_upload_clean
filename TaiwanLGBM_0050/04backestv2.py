@@ -4,7 +4,7 @@ import lightgbm as lgb
 import warnings
 import os
 import matplotlib
-matplotlib.use('Agg')  # 使用非互動式後端
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore")
@@ -39,7 +39,6 @@ if 'date' not in df.columns:
 
 df['date'] = pd.to_datetime(df['date'])
 
-# 確保 features 都存在
 for col in features:
     if col not in df.columns:
         df[col] = np.nan
@@ -48,12 +47,10 @@ df[features] = df[features].fillna(0)
 if 'symbol' not in df.columns:
     raise ValueError("原始CSV缺少 symbol 欄位！")
 
-# 只保留目標 ETF
 df = df[df['symbol'] == TARGET_SYMBOL].copy()
 if df.empty:
     raise ValueError(f"原始資料無 symbol={TARGET_SYMBOL} 資料！")
 
-# 測試區間起點
 test_start_date = pd.to_datetime('2019-01-09')
 test_df = df[df['date'] >= test_start_date].copy()
 if test_df.empty:
@@ -65,6 +62,7 @@ dates = sorted(test_df['date'].unique())
 open_map  = {(row['date'], row['symbol']): row['open']  for _, row in test_df.iterrows()}
 close_map = {(row['date'], row['symbol']): row['close'] for _, row in test_df.iterrows()}
 high_map  = {(row['date'], row['symbol']): row['high']  for _, row in test_df.iterrows()}
+low_map   = {(row['date'], row['symbol']): row['low']   for _, row in test_df.iterrows()}
 
 # ====== 持股物件與交易系統定義 ======
 class Position:
@@ -77,14 +75,25 @@ class Position:
         self.max_high = buy_price
         self.stop_price = buy_price * 0.97
 
-    def update(self, curr_high, curr_close):
+    def update(self, curr_high, curr_low):
+        """
+        改用當日最低價判斷是否觸及止損
+        回傳 (是否觸發止損, 實際賣出價)
+        """
         self.days += 1
         if curr_high > self.max_high:
             self.max_high = curr_high
         self.update_stop_price()
-        if curr_close < self.stop_price or self.days >= MAX_HOLDING_DAYS:
-            return True
-        return False
+        
+        # 如果當日最低價觸及止損價，立即以止損價出場
+        if curr_low <= self.stop_price:
+            return True, self.stop_price
+        
+        # 如果持有超過最大天數，以當日收盤價出場
+        if self.days >= MAX_HOLDING_DAYS:
+            return True, None  # None 代表用收盤價
+        
+        return False, None
 
     def update_stop_price(self):
         float_gain = (self.max_high - self.buy_price) / self.buy_price
@@ -93,6 +102,7 @@ class Position:
             self.stop_price = self.buy_price * (1 + step / 100)
         else:
             self.stop_price = self.buy_price * 0.97
+
 
 class SingleStockSystem:
     def __init__(self, buy_rule_type='original'):
@@ -135,31 +145,38 @@ class SingleStockSystem:
             self.cash -= invest_amt
             self.trade_log.append({
                 'date': date, 'symbol': symbol, 'side': 'buy',
-                'price': price, 'amount': units, 'cash_used': invest_amt,
-                'reason': 'init_buy'
+                'price': price, 'amount': units, 'cash_used': invest_amt
             })
             return True
         return False
 
-    def try_exit(self, close_price, date):
+    def try_exit(self, date):
         if self.position is None:
             return False
 
-        need_sell = self.position.update(
-            high_map.get((date, symbol), self.position.buy_price),
-            close_price
-        )
-        if need_sell or self.position.days >= MAX_HOLDING_DAYS:
-            sell_value = close_price * self.position.amount
+        curr_high = high_map.get((date, symbol), self.position.buy_price)
+        curr_low = low_map.get((date, symbol), self.position.buy_price)
+        curr_close = close_map.get((date, symbol), self.position.buy_price)
+
+        need_sell, sell_price = self.position.update(curr_high, curr_low)
+        
+        if need_sell:
+            # 如果是觸及止損，用止損價；如果是到期，用收盤價
+            if sell_price is None:
+                sell_price = curr_close
+            
+            sell_value = sell_price * self.position.amount
             buy_cost = self.position.buy_price * self.position.amount
             profit = sell_value - buy_cost
+            profit_pct = (sell_price - self.position.buy_price) / self.position.buy_price
+            
             self.cash += sell_value
             self.trade_log.append({
                 'date': date, 'symbol': symbol, 'side': 'sell',
-                'price': close_price,
+                'price': sell_price,
                 'amount': self.position.amount,
                 'profit': profit,
-                'reason': 'exit',
+                'profit_pct': profit_pct,
                 'hold_days': self.position.days,
                 'buy_price': self.position.buy_price
             })
@@ -168,10 +185,10 @@ class SingleStockSystem:
         return False
 
     def daily_update(self, date):
-        curr_close = close_map.get((date, symbol), None)
-        if curr_close is not None:
-            self.try_exit(curr_close, date)
+        # 先嘗試出場
+        self.try_exit(date)
 
+        # 更新投資組合價值
         port_val = self.cash
         if self.position is not None:
             last_close = close_map.get((date, symbol), self.position.buy_price)
@@ -183,6 +200,7 @@ class SingleStockSystem:
             'holdings': int(self.position is not None)
         })
 
+
 # ====== 載入模型 ======
 model = lgb.Booster(model_file=MODEL_PATH)
 
@@ -192,6 +210,7 @@ strategies = {
     'gate_06': "Gate 0.6 Full Position",
     'gate_08': "Gate 0.8 High Confidence Only"
 }
+
 
 results = {}
 
@@ -221,7 +240,7 @@ for key, desc in strategies.items():
     portfolio_df = pd.DataFrame(system.portfolio_value_log)
 
     if portfolio_df.empty or 'portfolio_value' not in portfolio_df.columns:
-        final_value, total_return, win_rate, max_loss = np.nan, np.nan, np.nan, np.nan
+        final_value, total_return, win_rate, max_loss, max_loss_pct = np.nan, np.nan, np.nan, np.nan, np.nan
     else:
         final_value = portfolio_df['portfolio_value'].iloc[-1]
         total_return = (final_value - INITIAL_CASH) / INITIAL_CASH
@@ -235,14 +254,23 @@ for key, desc in strategies.items():
             if losing_trades.shape[0] > 0:
                 max_loss = losing_trades['profit'].min()
                 worst_trade = losing_trades.loc[losing_trades['profit'].idxmin()]
+                max_loss_pct = worst_trade['profit_pct']
+                
                 print(f"\n[{desc}] 最大虧損交易明細：")
-                print(worst_trade[['date', 'price', 'buy_price', 'amount', 'profit', 'hold_days', 'reason']])
+                print(f"日期: {worst_trade['date']}")
+                print(f"買入價: {worst_trade['buy_price']:.2f}")
+                print(f"賣出價: {worst_trade['price']:.2f}")
+                print(f"虧損金額: {worst_trade['profit']:,.0f}")
+                print(f"虧損比例: {worst_trade['profit_pct']:.2%}")
+                print(f"持有天數: {int(worst_trade['hold_days'])}")
             else:
                 max_loss = 0
+                max_loss_pct = 0
                 print(f"\n[{desc}] 無虧損交易。")
         else:
             win_rate = 0
             max_loss = 0
+            max_loss_pct = 0
             print(f"\n[{desc}] 無任何賣出交易。")
 
     results[key] = {
@@ -252,7 +280,8 @@ for key, desc in strategies.items():
         'final_value': final_value,
         'total_return': total_return,
         'win_rate': win_rate,
-        'max_loss': max_loss
+        'max_loss': max_loss,
+        'max_loss_pct': max_loss_pct
     }
 
     print(f"\n=== {desc} ===")
@@ -260,7 +289,8 @@ for key, desc in strategies.items():
     print(f"期末資產: {final_value:,.0f}")
     print(f"總報酬率: {total_return:.2%}")
     print(f"贏率: {win_rate:.2%}")
-    print(f"最大單筆虧損: {max_loss:,.0f}")
+    print(f"最大單筆虧損: {max_loss:,.0f} ({max_loss_pct:.2%})")
+
 
 # ====== Buy & Hold 回測 ======
 portfolio_units_eq = 0
@@ -275,7 +305,7 @@ if open_price is not None:
 for date in dates:
     last_close = close_map.get((date, symbol), 0)
     pv_eq = portfolio_units_eq * last_close
-    value_log_eq.append({'date': date, 'portfolio_value': pv_eq, 'cash': 0})
+    value_log_eq.append({'date': date, 'portfolio_value': pv_eq})
 
 value_df_eq = pd.DataFrame(value_log_eq)
 if not value_df_eq.empty and 'portfolio_value' in value_df_eq.columns:
@@ -304,7 +334,6 @@ month_series = pd.Series(dates).dt.month
 year_series = pd.Series(dates).dt.year
 
 for idx, date in enumerate(dates):
-    # 每當「月份不同」或「年份不同」就視為新月份，執行一次 DCA 買入
     if idx == 0 or (month_series[idx] != month_series[idx - 1]
                     or year_series[idx] != year_series[idx - 1]):
         open_price = open_map.get((date, symbol), None)
@@ -320,7 +349,7 @@ for idx, date in enumerate(dates):
 
     close_price = close_map.get((date, symbol), 0)
     pv_dca = portfolio_units_dca * close_price
-    value_log_dca.append({'date': date, 'portfolio_value': pv_dca, 'cash': cash_dca})
+    value_log_dca.append({'date': date, 'portfolio_value': pv_dca})
 
 value_df_dca = pd.DataFrame(value_log_dca)
 if not value_df_dca.empty and 'portfolio_value' in value_df_dca.columns:
@@ -338,7 +367,6 @@ print(f"總報酬率: {total_return_dca:.2%}")
 # ====== 策略績效曲線比較圖 ======
 plt.figure(figsize=(12, 6))
 
-# 三種模型策略
 for key, res in results.items():
     pf = res['portfolio_df']
     if pf.empty or 'portfolio_value' not in pf.columns:
@@ -346,27 +374,22 @@ for key, res in results.items():
     plt.plot(pf['date'], pf['portfolio_value'],
              label=res['desc'], linewidth=2)
 
-# Buy&Hold
 if not value_df_eq.empty and 'portfolio_value' in value_df_eq.columns:
     plt.plot(value_df_eq['date'], value_df_eq['portfolio_value'],
              label='Buy&Hold', linewidth=2)
 
-
-# DCA
 if not value_df_dca.empty and 'portfolio_value' in value_df_dca.columns:
     plt.plot(value_df_dca['date'], value_df_dca['portfolio_value'],
              label='DCA (Monthly)', linewidth=2)
 
-
 plt.title('Strategy Portfolio Value Over Time', fontsize=14)
 plt.xlabel('Date')
 plt.ylabel('Portfolio Value ($)')
-plt.legend(loc='upper left', frameon=False)  # 移除圖例外框
+plt.legend(loc='upper left', frameon=False)
 plt.xticks(rotation=45)
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 
-# 存檔
 fig_path = os.path.join(path_pc, 'backtest_strategy_comparison.png')
 plt.savefig(fig_path, dpi=150)
 print(f"\n策略比較圖已存檔：{fig_path}")
