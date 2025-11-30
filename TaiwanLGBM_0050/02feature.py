@@ -8,19 +8,22 @@ import os
 warnings.filterwarnings("ignore")
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 
-symbols_all50 = ['0050']
+# 注意：你 CSV 裡 symbol 是 50 (int)，不是 '0050'
+symbols_all50 = [50]
 
 step1_file = 'outcomes_twse_2025-05-29.csv'
 print(f"載入資料: {step1_file}")
-df = pd.read_csv(path_pc + step1_file, index_col=[0,1])
+df = pd.read_csv(path_pc + step1_file, index_col=[0, 1])
 df.index.names = ['symbol', 'date']
-df = df[df.index.get_level_values('symbol').isin(symbols_all50)]
-df = pd.read_csv(path_pc + step1_file, index_col=[0,1])
-df.index.names = ['symbol', 'date']
+
 print("前 5 筆 index：")
 print(df.index[:5])
 print("所有 symbol 值：", sorted(set(df.index.get_level_values('symbol'))))
 
+# 只保留目標標的
+df = df[df.index.get_level_values('symbol').isin(symbols_all50)]
+
+# 刪掉每檔一開始 open/close 還是 NaN 前面的列
 for symbol in symbols_all50:
     if symbol in df.index.get_level_values('symbol'):
         this_df = df.loc[symbol]
@@ -32,13 +35,13 @@ for symbol in symbols_all50:
 valid_symbols = sorted(set(df.index.get_level_values('symbol')))
 print(f"過濾後的台股清單: {valid_symbols}")
 
-N_list = [3,5,7,9]
+# ========= 多 N、多 G 標籤 =========
+N_list = [3, 5, 7, 9]
 gate_list = [0.03, 0.05, 0.07]   # 三組門檻
 
 for N in N_list:
     future_max_col = f'future_max_return_{N}'
     future_min_col = f'future_min_return_{N}'
-    # 先算好 max/min future_return
     if future_max_col not in df.columns or future_min_col not in df.columns:
         print(f"補充計算 {future_max_col} / {future_min_col} ...")
         df[future_max_col] = np.nan
@@ -50,18 +53,17 @@ for N in N_list:
                 if i + N < len(closes):
                     future_window = closes[i+1:i+1+N]
                     this_close = closes[i]
-                    future_max = (np.max(future_window)-this_close)/this_close
-                    future_min = (np.min(future_window)-this_close)/this_close
+                    future_max = (np.max(future_window) - this_close) / this_close
+                    future_min = (np.min(future_window) - this_close) / this_close
                     df.loc[idx, future_max_col] = future_max
                     df.loc[idx, future_min_col] = future_min
 
-    # 針對每套 up/down 門檻分別標記 label
     for gate in gate_list:
         up_gate, down_gate = gate, -gate
         label_col = f'label_N{N}_G{int(gate*100)}'
         df[label_col] = 0
-        df.loc[df[future_max_col]>up_gate, label_col] = 1
-        df.loc[df[future_min_col]<down_gate, label_col] = -1
+        df.loc[df[future_max_col] > up_gate, label_col] = 1
+        df.loc[df[future_min_col] < down_gate, label_col] = -1
         print(f"\n--- N={N}, gate={gate*100:.1f}% 標籤分布 ---")
         print(df[label_col].value_counts(normalize=True))
 
@@ -92,8 +94,14 @@ df['atr10/atr100'] = df['atr10'] / df['atr100']
 df['atr10/atr20'] = df['atr10'] / df['atr20']
 
 for symbol in valid_symbols:
-    df.loc[(symbol, slice(None)), 'delta_atr10/atr100_10'] = df.loc[(symbol, slice(None)), 'atr10/atr100'] - df.loc[(symbol, slice(None)), 'atr10/atr100'].shift(10)
-    df.loc[(symbol, slice(None)), 'delta_atr10/atr100_3'] = df.loc[(symbol, slice(None)), 'atr10/atr100'] - df.loc[(symbol, slice(None)), 'atr10/atr100'].shift(3)
+    df.loc[(symbol, slice(None)), 'delta_atr10/atr100_10'] = (
+        df.loc[(symbol, slice(None)), 'atr10/atr100']
+        - df.loc[(symbol, slice(None)), 'atr10/atr100'].shift(10)
+    )
+    df.loc[(symbol, slice(None)), 'delta_atr10/atr100_3'] = (
+        df.loc[(symbol, slice(None)), 'atr10/atr100']
+        - df.loc[(symbol, slice(None)), 'atr10/atr100'].shift(3)
+    )
 
 std_func = lambda x, n: x.rolling(n, min_periods=1).std()
 for symbol in valid_symbols:
@@ -119,7 +127,9 @@ momentum_windows = [(5, 3), (10, 7), (25, 20), (50, 40), (100, 70)]
 for window, min_mom in momentum_windows:
     for symbol in valid_symbols:
         arr = df.loc[(symbol, slice(None)), 'close']
-        df.loc[(symbol, slice(None)), f'momentum_{window}'] = arr.rolling(window, min_periods=min_mom).apply(momentum_score)
+        df.loc[(symbol, slice(None)), f'momentum_{window}'] = (
+            arr.rolling(window, min_periods=min_mom).apply(momentum_score)
+        )
 
 ema_40 = lambda x: x.ewm(span=40, min_periods=1).mean()
 ema_80 = lambda x: x.ewm(span=80, min_periods=1).mean()
@@ -151,6 +161,7 @@ for col in scale_cols:
             arr = df.loc[(symbol, slice(None)), col]
             df.loc[(symbol, slice(None)), col + '_scaled50'] = zscore_50(arr)
 
+# ========= 修正版 MMI =========
 def mmi(window_values):
     closes = pd.Series(window_values)
     if len(closes) < 2:
@@ -165,15 +176,16 @@ def mmi(window_values):
             nh += 1
     return 100 * (nl + nh) / (len(closes) - 1)
 
-
 for symbol in valid_symbols:
     arr = df.loc[(symbol, slice(None)), 'close']
-    df.loc[(symbol, slice(None)), 'mmi50'] = arr.rolling(50, min_periods=2).apply(mmi)
+    df.loc[(symbol, slice(None)), 'mmi50'] = arr.rolling(50, min_periods=2).apply(mmi, raw=True)
 
 ema_std50 = lambda x: x.ewm(span=50, min_periods=20).std()
 for symbol in valid_symbols:
     df.loc[(symbol, slice(None)), 'past_return_1_ema_std50'] = ema_std50(df.loc[(symbol, slice(None)), 'past_return_1'])
-    df.loc[(symbol, slice(None)), 'price_chg_1'] = df.loc[(symbol, slice(None)), 'close'] - df.loc[(symbol, slice(None)), 'close'].shift(1)
+    df.loc[(symbol, slice(None)), 'price_chg_1'] = (
+        df.loc[(symbol, slice(None)), 'close'] - df.loc[(symbol, slice(None)), 'close'].shift(1)
+    )
     df.loc[(symbol, slice(None)), 'price_chg_1_ema_std50'] = ema_std50(df.loc[(symbol, slice(None)), 'price_chg_1'])
 
 df['past_return_1_ema_std50*2.2'] = df['past_return_1_ema_std50'] * 2.2
@@ -205,7 +217,7 @@ try:
     print("Done! STEP2完成（多Nx多G標籤與全特徵）, 輸出檔名:", out_csv)
 except PermissionError:
     print("【權限錯誤】請確認該CSV未被Excel等程式佔用後再執行！")
-# ======== 在儲存CSV後新增 feature_list.txt 儲存特徵清單 ========
+
 exclude_prefix = ['label', 'future', 'target', 'symbol', 'date']
 features = [
     col for col in df.columns
