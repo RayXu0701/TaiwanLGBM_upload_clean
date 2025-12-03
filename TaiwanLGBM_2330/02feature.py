@@ -6,9 +6,8 @@ import warnings
 import os
 
 warnings.filterwarnings("ignore")
-path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 
-# 注意：你 CSV 裡 symbol 是 50 (int)，不是 '0050'
+path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 symbols_all50 = [50]
 
 step1_file = 'outcomes_twse_2025-05-29.csv'
@@ -35,7 +34,7 @@ for symbol in symbols_all50:
 valid_symbols = sorted(set(df.index.get_level_values('symbol')))
 print(f"過濾後的台股清單: {valid_symbols}")
 
-# ========= 多 N、多 G 標籤 =========
+# ========= 多 N、多 gate 標籤 =========
 N_list = [3, 5, 7, 9]
 gate_list = [0.03, 0.05, 0.07]   # 三組門檻
 
@@ -211,24 +210,10 @@ df['target_lower_v2'] = df['close'] * (1 - df['past_return_1_ema_std50*2.2'])
 last_date = pd.to_datetime(sorted(list(set(df.index.get_level_values('date'))))[-1])
 out_csv = f'outcomes_new_features_{last_date.strftime("%Y-%m-%d")}_multiG.csv'
 full_path = os.path.join(path_pc, out_csv)
-print("將儲存:", full_path)
+
 try:
     df.to_csv(full_path)
     print("Done! STEP2完成（多Nx多G標籤與全特徵）, 輸出檔名:", out_csv)
 except PermissionError:
     print("【權限錯誤】請確認該CSV未被Excel等程式佔用後再執行！")
 
-exclude_prefix = ['label', 'future', 'target', 'symbol', 'date']
-features = [
-    col for col in df.columns
-    if (
-        (df[col].dtype in [float, np.float64, int, np.int64]) and
-        not any([col.startswith(p) for p in exclude_prefix])
-    )
-]
-
-features_path = os.path.join(path_pc, 'features_list.txt')
-with open(features_path, 'w', encoding='utf-8') as f:
-    for col in features:
-        f.write(col + '\n')
-print(f'已輸出特徵清單：{features_path}，共有 {len(features)} 個特徵')

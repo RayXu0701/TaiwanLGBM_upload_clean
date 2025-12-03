@@ -7,63 +7,72 @@ from datetime import datetime
 import time
 from scipy import stats
 import warnings
-import twstock
+from FinMind.data import DataLoader  
 
 warnings.filterwarnings("ignore")
 
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 symbols_all50 = ['0050']
 
-def get_twse_ohlcv_monthly(symbols, start_year, start_month, end_year, end_month):
+# 用 FinMind 抓日 OHLCV 
+def get_finmind_ohlcv(symbols, start_date, end_date):
+    print(f"開始從 FinMind 下載資料 ({start_date} ~ {end_date})...")
+
+    api = DataLoader()
     all_data = []
+
     for symbol in symbols:
-        print(f"Downloading {symbol} monthly data...")
-        data = []
+        print(f"Downloading {symbol} ...")
 
-        # 只建一次 Stock 物件
-        stock = twstock.Stock(symbol)
+        # FinMind 日成交資訊
+        df = api.taiwan_stock_daily(
+            stock_id=symbol,
+            start_date=start_date,
+            end_date=end_date
+        ) 
 
-        for year in range(start_year, end_year + 1):
-            for month in range(1, 13):
-                # 超出結束年月就停
-                if (year > end_year) or (year == end_year and month > end_month):
-                    break
+        if df.empty:
+            print(f"Warning: {symbol} 查無資料")
+            continue
 
-                print(f"  Fetching {year}-{month:02d} ...")
-                try:
-                    monthly_data = stock.fetch(year, month)  
-                    time.sleep(2)  
+        # --- 欄位對應成你原本的格式 ---
+        df = df.rename(columns={
+            'stock_id': 'symbol',
+            'Trading_Volume': 'volume',      # 成交股數
+            'Trading_money': 'turnover',     # 成交金額
+            'max': 'high',
+            'min': 'low',
+            'Trading_turnover': 'transaction'
+        })
 
-                    if not monthly_data:
-                        continue
+        # 確保數據為數值型態
+        cols_to_float = ['open', 'high', 'low', 'close', 'volume', 'turnover', 'transaction']
+        for col in cols_to_float:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                    for rec in monthly_data:
-                        data.append({
-                            'date': rec.date,
-                            'symbol': symbol,
-                            'open': rec.open,
-                            'high': rec.high,
-                            'low': rec.low,
-                            'close': rec.close,
-                            'volume': rec.capacity,
-                            'turnover': rec.turnover,
-                            'transaction': rec.transaction
-                        })
-                except Exception as e:
-                    print(f"Error: {symbol} {year}-{month:02d}", e)
+        # 日期轉成 datetime
+        df['date'] = pd.to_datetime(df['date'])
 
-        df_symbol = pd.DataFrame(data)
-        df_symbol.set_index(['symbol', 'date'], inplace=True)
-        all_data.append(df_symbol)
+        # 設定 MultiIndex (symbol, date) 跟原本完全一樣
+        df.set_index(['symbol', 'date'], inplace=True)
 
-    return pd.concat(all_data)
+        all_data.append(df)
+
+    if all_data:
+        return pd.concat(all_data)
+    else:
+        return pd.DataFrame()
 
 
-# 輸入抓取區間
-start_year, start_month = 2009, 1
+# 抓取區間設定：
+start_year, start_month = 2003, 6
 end_year, end_month = 2025, 5
 
-df = get_twse_ohlcv_monthly(symbols_all50, start_year, start_month, end_year, end_month)
+start_date = f"{start_year:04d}-{start_month:02d}-01"
+end_date = f"{end_year:04d}-{end_month:02d}-31"   
+
+df = get_finmind_ohlcv(symbols_all50, start_date, end_date)
 
 # 指標計算
 def calc_features(df, symbols):
@@ -150,10 +159,13 @@ def calc_features(df, symbols):
             df.loc[(symbol, slice(None)), 'log_volume_std50'] = std_50(df.loc[(symbol, slice(None)), 'log_volume'])
     return df
 
-df = calc_features(df, symbols_all50)
+# 算完feature後輸出 CSV
+if not df.empty:
+    df = calc_features(df, symbols_all50)
 
-# 輸出 CSV
-last_date = pd.to_datetime(sorted(list(set(df.index.get_level_values('date'))))[-1])
-out_csv = f'outcomes_twse_{last_date.strftime("%Y-%m-%d")}.csv'
-df.to_csv(path_pc + out_csv)
-print("Done! 資料輸出檔名:", out_csv)
+    last_date = pd.to_datetime(sorted(list(set(df.index.get_level_values('date'))))[-1])
+    out_csv = f'outcomes_twse_{last_date.strftime("%Y-%m-%d")}.csv'
+    df.to_csv(path_pc + out_csv)
+    print("Done! 資料輸出檔名:", out_csv)
+else:
+    print("錯誤：沒有抓到任何資料。")

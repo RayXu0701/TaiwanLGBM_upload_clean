@@ -76,10 +76,6 @@ class Position:
         self.stop_price = buy_price * 0.97
 
     def update(self, curr_high, curr_low):
-        """
-        改用當日最低價判斷是否觸及止損
-        回傳 (是否觸發止損, 實際賣出價)
-        """
         self.days += 1
         if curr_high > self.max_high:
             self.max_high = curr_high
@@ -394,5 +390,86 @@ fig_path = os.path.join(path_pc, 'backtest_strategy_comparison.png')
 plt.savefig(fig_path, dpi=150)
 print(f"\n策略比較圖已存檔：{fig_path}")
 plt.close()
+# ====== 個別策略買賣點視覺化（按年度分段） ======
+for key, res in results.items():
+    desc = res['desc']
+    trade_df = res['trade_df']
+    
+    if trade_df.empty:
+        print(f"\n[{desc}] 無交易記錄，跳過繪圖。")
+        continue
+    
+    # 準備收盤價資料
+    price_df = test_df[['date', 'close']].drop_duplicates('date').sort_values('date')
+    price_df['year'] = price_df['date'].dt.year
+    
+    # 分離買入與賣出
+    buy_trades = trade_df[trade_df['side'] == 'buy'].copy()
+    sell_trades = trade_df[trade_df['side'] == 'sell'].copy()
+    buy_trades['year'] = buy_trades['date'].dt.year
+    sell_trades['year'] = sell_trades['date'].dt.year
+    
+    # 取得所有年份
+    all_years = sorted(price_df['year'].unique())
+    
+    # 逐年繪製
+    for year in all_years:
+        # 過濾當年資料
+        year_price = price_df[price_df['year'] == year]
+        year_buys = buy_trades[buy_trades['year'] == year]
+        year_sells = sell_trades[sell_trades['year'] == year]
+        
+        if year_price.empty:
+            continue
+        
+        # 建立圖表（拉寬）
+        plt.figure(figsize=(20, 6))
+        
+        # 畫收盤價線圖
+        plt.plot(year_price['date'], year_price['close'], 
+                 color='steelblue', linewidth=1.5, label='Close Price', alpha=0.8)
+        
+        # 畫買入點（綠色實心圓點 + 價格標註）
+        if not year_buys.empty:
+            for _, row in year_buys.iterrows():
+                plt.scatter(row['date'], row['price'], 
+                           color='green', s=100, marker='o', 
+                           edgecolors='darkgreen', linewidths=1.5, zorder=5)
+        
+        # 畫賣出點（獲利綠 v、虧損紅 v + 損益% 標註）
+        if not year_sells.empty:
+            for _, row in year_sells.iterrows():
+                profit_pct = row['profit_pct']
+                if profit_pct > 0:
+                    color = 'green'
+                    marker = 'v'
+                else:
+                    color = 'red'
+                    marker = 'v'
+                
+                plt.scatter(row['date'], row['price'], 
+                           color=color, s=100, marker=marker, 
+                           edgecolors='black', linewidths=1.5, zorder=5)
+                
+                # 在點下方標註損益%
+                plt.text(row['date'], row['price'] * 0.99, 
+                        f"{profit_pct:.1%}", 
+                        fontsize=8, ha='center', va='top', color=color, weight='bold')
+        
+        plt.title(f'{desc} - {year} Buy & Sell Points', fontsize=14, weight='bold')
+        plt.xlabel('Date', fontsize=11)
+        plt.ylabel('Price ($)', fontsize=11)
+        plt.legend(loc='upper left', fontsize=10)
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3, linestyle='--')
+        plt.tight_layout()
+        
+        # 存檔（檔名加上年份）
+        safe_name = desc.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
+        fig_path = os.path.join(path_pc, f'buysell_points_{safe_name}_{year}.png')
+        plt.savefig(fig_path, dpi=150)
+        print(f"[{desc}] {year}年買賣點圖已存檔：{fig_path}")
+        plt.close()
+
 
 print('\n全部回測完成!')

@@ -1,14 +1,15 @@
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  
+import matplotlib.pyplot as plt
+import warnings
+import seaborn as sns
 import lightgbm as lgb
 from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score
-import matplotlib
-matplotlib.use('Agg')  # 加這行，強制不用 Tkinter
-import matplotlib.pyplot as plt
-import seaborn as sns
-import warnings
 import random
 import os
+
 
 warnings.filterwarnings("ignore")
 SEED = 42
@@ -61,7 +62,7 @@ def eval_pred_single(model, X, y, name):
     plt.ylabel('True Class')
     plt.tight_layout()
     
-    # 改成存檔而不是 plt.show()
+    
     fig_name = name.replace(' ', '_').replace('=', '').replace(',', '').replace('.', '_')
     fig_path = os.path.join(path_pc, f"confusion_{fig_name}.png")
     plt.savefig(fig_path, dpi=100)
@@ -125,7 +126,7 @@ for N in N_list:
 
         total_len = len(df_filtered)
         train_len = int(total_len * 0.5)
-        valid_len = int(total_len * 0.25)
+        valid_len = int(total_len * 0.1)
 
         train_df = df_filtered.iloc[:train_len]
         valid_df = df_filtered.iloc[train_len:train_len + valid_len]
@@ -161,7 +162,8 @@ for N in N_list:
             'accuracy': acc,
             'f1_macro': f1,
             'direction_accuracy': dir_acc,
-            'model': model
+            'model': model,
+            'features':features,
         })
 
 results_df = pd.DataFrame([
@@ -176,7 +178,6 @@ results_df = pd.DataFrame([
 ])
 print("\n全部模型摘要：")
 print(results_df)
-
 print("\n請輸入要存檔的 N（如5） 和 gate（如0.03）")
 
 try:
@@ -197,6 +198,13 @@ if selected is not None:
     save_path = os.path.join(path_pc, f"model_N{N_choice}_gate{int(gate_choice*100):02d}.txt")
     selected['model'].save_model(save_path)
     print(f"\n已儲存 N={N_choice}, gate={gate_choice} 模型在：{save_path}")
+    
+    features_for_selected = selected['features']
+    feat_path = os.path.join(path_pc, "features_list.txt")
+    with open(feat_path, "w", encoding="utf-8") as f:
+        for col in features_for_selected:
+            f.write(col + "\n")
+    print("特徵欄位清單已存檔：", feat_path)
 else:
     print("查無此組合，請確認選項是否正確。")
 
