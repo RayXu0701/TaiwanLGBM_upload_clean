@@ -23,7 +23,7 @@ print(f"讀取模型檔: {MODEL_PATH}")
 with open(FEATURES_PATH, 'r', encoding='utf-8') as f:
     features = [line.strip() for line in f.readlines()]
 
-TARGET_SYMBOL = 50
+TARGET_SYMBOL = 2330
 INITIAL_CASH = 1_000_000
 MAX_HOLDING_DAYS = 90
 TRADE_COST = 0.0035

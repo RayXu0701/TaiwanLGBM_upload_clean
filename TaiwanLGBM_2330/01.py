@@ -12,7 +12,7 @@ from FinMind.data import DataLoader
 warnings.filterwarnings("ignore")
 
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
-symbols_all50 = ['0050']
+symbols_all50 = ['2330']
 
 # 用 FinMind 抓日 OHLCV 
 def get_finmind_ohlcv(symbols, start_date, end_date):
@@ -66,7 +66,7 @@ def get_finmind_ohlcv(symbols, start_date, end_date):
 
 
 # 抓取區間設定：
-start_year, start_month = 2003, 6
+start_year, start_month = 2000, 5
 end_year, end_month = 2025, 5
 
 start_date = f"{start_year:04d}-{start_month:02d}-01"
