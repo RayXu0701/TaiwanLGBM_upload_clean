@@ -7,14 +7,14 @@ from datetime import datetime
 import time
 from scipy import stats
 import warnings
-from FinMind.data import DataLoader  
+from FinMind.data import DataLoader
 
 warnings.filterwarnings("ignore")
 
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 symbols_all50 = ['2330']
 
-# 用 FinMind 抓日 OHLCV 
+# 1) 用 FinMind 抓「未還原」日 OHLCV
 def get_finmind_ohlcv(symbols, start_date, end_date):
     print(f"開始從 FinMind 下載資料 ({start_date} ~ {end_date})...")
 
@@ -24,18 +24,16 @@ def get_finmind_ohlcv(symbols, start_date, end_date):
     for symbol in symbols:
         print(f"Downloading {symbol} ...")
 
-        # FinMind 日成交資訊
         df = api.taiwan_stock_daily(
             stock_id=symbol,
             start_date=start_date,
             end_date=end_date
-        ) 
+        )
 
         if df.empty:
             print(f"Warning: {symbol} 查無資料")
             continue
 
-        # --- 欄位對應成你原本的格式 ---
         df = df.rename(columns={
             'stock_id': 'symbol',
             'Trading_Volume': 'volume',      # 成交股數
@@ -45,18 +43,13 @@ def get_finmind_ohlcv(symbols, start_date, end_date):
             'Trading_turnover': 'transaction'
         })
 
-        # 確保數據為數值型態
         cols_to_float = ['open', 'high', 'low', 'close', 'volume', 'turnover', 'transaction']
         for col in cols_to_float:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # 日期轉成 datetime
         df['date'] = pd.to_datetime(df['date'])
-
-        # 設定 MultiIndex (symbol, date) 跟原本完全一樣
         df.set_index(['symbol', 'date'], inplace=True)
-
         all_data.append(df)
 
     if all_data:
@@ -65,16 +58,62 @@ def get_finmind_ohlcv(symbols, start_date, end_date):
         return pd.DataFrame()
 
 
-# 抓取區間設定：
-start_year, start_month = 2000, 5
-end_year, end_month = 2025, 5
+# 2) 用 DividendResult 還原權值，產生 open/high/low/close_adj （再覆蓋原價）
+def adjust_price_with_dividend(df, symbols, start_date, end_date):
+    api = DataLoader()
 
-start_date = f"{start_year:04d}-{start_month:02d}-01"
-end_date = f"{end_year:04d}-{end_month:02d}-31"   
+    df_reset = df.reset_index()
 
-df = get_finmind_ohlcv(symbols_all50, start_date, end_date)
+    df_div_all = []
+    for sym in symbols:
+        df_div = api.taiwan_stock_dividend_result(
+            stock_id=sym,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if df_div.empty:
+            continue
 
-# 指標計算
+        df_div = df_div[["date", "before_price", "after_price"]].copy()
+        df_div["date"] = pd.to_datetime(df_div["date"])
+        df_div["symbol"] = sym
+        df_div["adj_factor_event"] = df_div["after_price"] / df_div["before_price"]
+        df_div_all.append(df_div)
+
+    if not df_div_all:
+        print("Warning: 沒有任何除權息資料，直接回傳原始 df")
+        return df
+
+    df_div_all = pd.concat(df_div_all, ignore_index=True)
+
+    df_merge = pd.merge(
+        df_reset,
+        df_div_all[["symbol", "date", "adj_factor_event"]],
+        on=["symbol", "date"],
+        how="left"
+    )
+    df_merge["adj_factor_event"] = df_merge["adj_factor_event"].fillna(1.0)
+    df_merge = df_merge.sort_values(["symbol", "date"])
+    df_merge["adj_cum"] = 1.0
+
+    for sym in symbols:
+        mask = df_merge["symbol"] == sym
+        sub = df_merge.loc[mask].copy()
+        factors = sub["adj_factor_event"].iloc[::-1].cumprod().iloc[::-1]
+        df_merge.loc[mask, "adj_cum"] = factors.values
+
+    for col in ["open", "high", "low", "close"]:
+        df_merge[col + "_adj"] = df_merge[col] * df_merge["adj_cum"]
+
+    df_adj = df_merge.set_index(["symbol", "date"]).sort_index()
+
+    for col in ["open", "high", "low", "close"]:
+        df_adj[col] = df_adj[col + "_adj"]
+
+    return df_adj
+
+
+# 3) 指標計算（你原本那段不動）
 def calc_features(df, symbols):
     ma_50 = lambda x: x.rolling(50, min_periods=1).mean()
     ema_50 = lambda x: x.ewm(span=50, min_periods=1).mean()
@@ -82,7 +121,7 @@ def calc_features(df, symbols):
     macd_signal = lambda x: x.ewm(span=9, min_periods=1).mean()
     bbands50_upper = lambda x: x.rolling(50, min_periods=1).mean() + 2 * x.rolling(50, min_periods=1).std(ddof=0)
     bbands50_lower = lambda x: x.rolling(50, min_periods=1).mean() - 2 * x.rolling(50, min_periods=1).std(ddof=0)
-    
+
     for symbol in symbols:
         arr_close = df.loc[(symbol, slice(None)), 'close']
         df.loc[(symbol, slice(None)), 'ema50'] = ema_50(arr_close)
@@ -95,8 +134,7 @@ def calc_features(df, symbols):
         df.loc[(symbol, slice(None)), 'sma50'] = ma_50(arr_close)
         df.loc[(symbol, slice(None)), 'bbands50_upper'] = bbands50_upper(arr_close)
         df.loc[(symbol, slice(None)), 'bbands50_lower'] = bbands50_lower(arr_close)
-        
-        # RSI
+
         df_symbol = df.loc[df.index.get_level_values('symbol') == symbol]
         deltas = df_symbol['close'].diff().replace({np.nan: 0.0})
         dUp = deltas.clip(lower=0)
@@ -109,8 +147,7 @@ def calc_features(df, symbols):
             RolDown.iloc[i] = (RolDown.iloc[i - 1] * 13 - dDown.iloc[i]) / 14
             rsi.iloc[i] = 100 - 100 / (1 + RolUp.iloc[i] / RolDown.iloc[i]) if RolDown.iloc[i] != 0 else 100
         df.loc[(symbol, slice(None)), 'rsi14'] = rsi
-        
-        # 其他技術指標
+
         df.loc[(symbol, slice(None)), 'volume_pct_change_1_day'] = df.loc[(symbol, slice(None)), 'volume'].pct_change(1)
         df.loc[(symbol, slice(None)), 'close_pct_change_5_day'] = df.loc[(symbol, slice(None)), 'close'].pct_change(5)
         df.loc[(symbol, slice(None)), 'intraday_chg'] = (
@@ -132,15 +169,17 @@ def calc_features(df, symbols):
         df.loc[(symbol, slice(None)), '(close/sma)-1'] = (df.loc[(symbol, slice(None)), 'close'] / df.loc[(symbol, slice(None)), 'sma50']) - 1
         df.loc[(symbol, slice(None)), 'upper/close-1'] = (df.loc[(symbol, slice(None)), 'bbands50_upper'] / df.loc[(symbol, slice(None)), 'close']) - 1
         df.loc[(symbol, slice(None)), '1-lower/close'] = 1 - (df.loc[(symbol, slice(None)), 'bbands50_lower'] / df.loc[(symbol, slice(None)), 'close'])
-        
+
         def slope(ts):
             x = np.arange(len(ts))
             mask = ~np.isnan(x) & ~np.isnan(ts)
             regress = stats.linregress(x[mask], ts[mask])
             return regress[0]
+
         for col in ['bbands50_lower','bbands50_upper','close','ema50','high','low','open','sma50','volume','rsi14']:
             arr = df.loc[(symbol, slice(None)), col]
             df.loc[(symbol, slice(None)), col + '_slope'] = arr.rolling(14, min_periods=1).apply(slope)
+
         def momentum_score(ts):
             x = np.arange(len(ts))
             log_ts = np.log(ts)
@@ -148,6 +187,7 @@ def calc_features(df, symbols):
             regress = stats.linregress(x[mask], log_ts[mask])
             annualized_slope = (np.power(np.exp(regress[0]), 252) - 1) * 100
             return annualized_slope * (regress[2] ** 2)
+
         arr = df.loc[(symbol, slice(None)), 'close']
         df.loc[(symbol, slice(None)), 'momentum'] = arr.rolling(50, min_periods=1).apply(momentum_score)
         for r in [1,2,3,4,5,10]:
@@ -159,8 +199,18 @@ def calc_features(df, symbols):
             df.loc[(symbol, slice(None)), 'log_volume_std50'] = std_50(df.loc[(symbol, slice(None)), 'log_volume'])
     return df
 
-# 算完feature後輸出 CSV
+
+# 主流程
+start_year, start_month = 2000, 5
+end_year, end_month = 2025, 5
+
+start_date = f"{start_year:04d}-{start_month:02d}-01"
+end_date   = f"{end_year:04d}-{end_month:02d}-31"
+
+df = get_finmind_ohlcv(symbols_all50, start_date, end_date)
+
 if not df.empty:
+    df = adjust_price_with_dividend(df, symbols_all50, start_date, end_date)
     df = calc_features(df, symbols_all50)
 
     last_date = pd.to_datetime(sorted(list(set(df.index.get_level_values('date'))))[-1])
