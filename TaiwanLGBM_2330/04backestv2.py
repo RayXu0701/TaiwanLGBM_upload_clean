@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore")
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 DATA_PATH = os.path.join(path_pc, 'outcomes_new_features_2025-05-29_multiG.csv')
 FEATURES_PATH = os.path.join(path_pc, 'features_list.txt')
-MODEL_PATH = os.path.join(path_pc, 'model_N5_gate03.txt')
+MODEL_PATH = os.path.join(path_pc, 'model_N5_gate05.txt')
 
 print(f"讀取資料檔: {DATA_PATH}")
 print(f"讀取特徵清單: {FEATURES_PATH}")
@@ -30,10 +30,8 @@ TRADE_COST = 0.0035
 MIN_HOLDING_DAYS = 3
 TRAILING_STEP_BASE = 5
 TRAILING_STEP_INC = 1
-
 # ====== 讀取資料並整理 ======
 df = pd.read_csv(DATA_PATH)
-
 if 'date' not in df.columns:
     raise ValueError("原始CSV缺少 date 欄位！")
 
@@ -42,23 +40,25 @@ df['date'] = pd.to_datetime(df['date'])
 for col in features:
     if col not in df.columns:
         df[col] = np.nan
-df[features] = df[features].fillna(0)
 
+df[features] = df[features].fillna(0)
 if 'symbol' not in df.columns:
     raise ValueError("原始CSV缺少 symbol 欄位！")
-
 df = df[df['symbol'] == TARGET_SYMBOL].copy()
 if df.empty:
     raise ValueError(f"原始資料無 symbol={TARGET_SYMBOL} 資料！")
 
-test_start_date = pd.to_datetime('2019-01-09')
-test_df = df[df['date'] >= test_start_date].copy()
-if test_df.empty:
-    raise ValueError(f"起始日期 {test_start_date} 後無資料！")
+# 依日期排序
+df = df.sort_values('date')
 
+# 直接用最後 40% 當回測期間
+total_len = len(df)
+test_len = int(total_len * 0.4)
+test_df = df.iloc[-test_len:].copy()
 symbol = TARGET_SYMBOL
 dates = sorted(test_df['date'].unique())
-
+symbol = TARGET_SYMBOL
+dates = sorted(test_df['date'].unique())
 open_map  = {(row['date'], row['symbol']): row['open']  for _, row in test_df.iterrows()}
 close_map = {(row['date'], row['symbol']): row['close'] for _, row in test_df.iterrows()}
 high_map  = {(row['date'], row['symbol']): row['high']  for _, row in test_df.iterrows()}

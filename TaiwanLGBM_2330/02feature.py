@@ -8,7 +8,7 @@ import os
 warnings.filterwarnings("ignore")
 
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
-symbols_all50 = [2330]
+symbols_all50 = [50]
 
 step1_file = 'outcomes_twse_2025-05-29.csv'
 print(f"載入資料: {step1_file}")

@@ -12,7 +12,7 @@ from FinMind.data import DataLoader
 warnings.filterwarnings("ignore")
 
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
-symbols_all50 = ['2330']
+symbols_all50 = ['0050']
 
 # 1) 用 FinMind 抓「未還原」日 OHLCV
 def get_finmind_ohlcv(symbols, start_date, end_date):
@@ -24,6 +24,7 @@ def get_finmind_ohlcv(symbols, start_date, end_date):
     for symbol in symbols:
         print(f"Downloading {symbol} ...")
 
+        #FinMind日成交資訊
         df = api.taiwan_stock_daily(
             stock_id=symbol,
             start_date=start_date,
@@ -34,6 +35,7 @@ def get_finmind_ohlcv(symbols, start_date, end_date):
             print(f"Warning: {symbol} 查無資料")
             continue
 
+        #欄位對照原本價格
         df = df.rename(columns={
             'stock_id': 'symbol',
             'Trading_Volume': 'volume',      # 成交股數
@@ -43,13 +45,18 @@ def get_finmind_ohlcv(symbols, start_date, end_date):
             'Trading_turnover': 'transaction'
         })
 
+        #確保數據為數值型態
         cols_to_float = ['open', 'high', 'low', 'close', 'volume', 'turnover', 'transaction']
         for col in cols_to_float:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
+        #日期轉為data
         df['date'] = pd.to_datetime(df['date'])
+
+        #設定MultiIndex(symbol,date)跟原本一樣
         df.set_index(['symbol', 'date'], inplace=True)
+
         all_data.append(df)
 
     if all_data:

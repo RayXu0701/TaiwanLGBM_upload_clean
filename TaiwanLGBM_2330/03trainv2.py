@@ -16,7 +16,7 @@ SEED = 42
 np.random.seed(SEED)
 random.seed(SEED)
 
-TAIWAN_SYMBOLS = [2330]
+TAIWAN_SYMBOLS = [50]
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 DATA_PATH = os.path.join(path_pc, 'outcomes_new_features_2025-05-29_multiG.csv')
 
@@ -125,8 +125,8 @@ for N in N_list:
         df_filtered = df_filtered.sort_values('date')
 
         total_len = len(df_filtered)
-        train_len = int(total_len * 0.5)
-        valid_len = int(total_len * 0.1)
+        train_len = int(total_len * 0.7)
+        valid_len = int(total_len * 0.15)
 
         train_df = df_filtered.iloc[:train_len]
         valid_df = df_filtered.iloc[train_len:train_len + valid_len]
