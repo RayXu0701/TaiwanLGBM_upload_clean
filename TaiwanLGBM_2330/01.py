@@ -12,7 +12,7 @@ from FinMind.data import DataLoader
 warnings.filterwarnings("ignore")
 
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
-symbols_all50 = ['0050']
+symbols_all50 = ['2330']
 
 # 1) 用 FinMind 抓「未還原」日 OHLCV
 def get_finmind_ohlcv(symbols, start_date, end_date):

@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore")
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 DATA_PATH = os.path.join(path_pc, 'outcomes_new_features_2025-05-29_multiG.csv')
 FEATURES_PATH = os.path.join(path_pc, 'features_list.txt')
-MODEL_PATH = os.path.join(path_pc, 'model_N5_gate05.txt')
+MODEL_PATH = os.path.join(path_pc, 'model_N9_gate05.txt')
 
 print(f"讀取資料檔: {DATA_PATH}")
 print(f"讀取特徵清單: {FEATURES_PATH}")

@@ -16,7 +16,7 @@ SEED = 42
 np.random.seed(SEED)
 random.seed(SEED)
 
-TAIWAN_SYMBOLS = [50]
+TAIWAN_SYMBOLS = [2330]
 path_pc = 'C:/Users/ray92/Desktop/TaiwanLGBM_upload/'
 DATA_PATH = os.path.join(path_pc, 'outcomes_new_features_2025-05-29_multiG.csv')
 
